@@ -3,6 +3,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from cogs.build_post import HeroPaginationView
+from cogs.build_search import SearchHeroPaginationView
 
 
 class LibraryDeskView(discord.ui.View):
@@ -39,6 +40,36 @@ class LibraryDeskView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(
+        label="🔍 ビルドを探す",
+        style=discord.ButtonStyle.success,
+        custom_id="library_desk:search_build",
+    )
+    async def search_build_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        build_cog = interaction.client.get_cog("BuildPostCog")
+        if not build_cog:
+            await interaction.response.send_message(
+                "❌ システムエラー：ビルド管理機能が読み込まれていません。",
+                ephemeral=True,
+            )
+            return
+
+        if not build_cog.hero_forums:
+            build_cog.refresh_hero_forums()
+
+        if not build_cog.hero_forums:
+            await interaction.response.send_message(
+                "❌ 図書館のヒーロー書架が見つかりません。管理者に連絡してください。",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "🔍 ビルドを探したい**ヒーロー**を選択してください。",
+            view=SearchHeroPaginationView(build_cog.hero_forums, page=0),
+            ephemeral=True,
+        )
+
 
 class LibraryDeskCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -50,21 +81,17 @@ class LibraryDeskCog(commands.Cog):
         embed = discord.Embed(
             title="📚 Deadlock Library 受付カウンター",
             description=(
-                "あなたの愛用ビルドを図書館（アーカイブ）に寄贈・登録できます！\n"
-                "下のボタンを押して、**ヒーロー ➔ 傾向タグ・ランク ➔ ビルドコード** の順に入力してください。\n\n"
-                "💡 **入力に必要なもの**\n"
-                "・ビルドタイトル\n"
-                "・ゲーム内のビルドコード（半角数字6桁）\n"
-                "・立ち回りや強み弱みの解説（任意）"
+                "愛用ビルドの寄贈（登録）や、図書館に眠るビルドの検索ができます！\n\n"
+                "📖 **ビルドを寄贈する**：ヒーロー・タグ・ランクを選んで6桁コードを登録\n"
+                "🔍 **ビルドを探す**：ヒーローやタグから登録済みビルドを検索して表示"
             ),
             color=discord.Color.blue(),
         )
-        embed.set_footer(text="※ ボタンは押した本人にのみ入力画面が表示されます")
+        embed.set_footer(text="※ ボタンを押した本人にのみ操作画面が表示されます")
 
         await interaction.response.send_message("✅ 受付カウンターを設置しました！（5秒後に消えます）", ephemeral=True)
         await interaction.channel.send(embed=embed, view=LibraryDeskView())
 
-        # ▼ ここが追記部分：5秒待ってから「設置しました！」のメッセージを消す
         await asyncio.sleep(5)
         await interaction.delete_original_response()
 
