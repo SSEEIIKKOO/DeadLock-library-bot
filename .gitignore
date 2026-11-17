@@ -1,0 +1,15 @@
+# 環境変数（トークンやサーバーIDは絶対に上げない）
+.env
+*.env
+
+# Pythonのキャッシュファイル（自動生成されるゴミファイル）
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 仮想環境フォルダ
+venv/
+.venv/
+
+# エディタ設定（VS Codeなど）
+.vscode/
