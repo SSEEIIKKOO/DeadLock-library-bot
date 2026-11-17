@@ -13,3 +13,4 @@ venv/
 
 # エディタ設定（VS Codeなど）
 .vscode/
+data/
