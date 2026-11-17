@@ -1,3 +1,4 @@
+import asyncio
 import re
 import discord
 from discord import app_commands
@@ -81,6 +82,10 @@ class BuildSubmitModal(discord.ui.Modal, title="Deadlock Library ビルド登録
                 f"スレッドリンク: {created_thread.jump_url}",
                 ephemeral=True,
             )
+            # ▼ この2行を追記（30秒後に自動削除）
+            await asyncio.sleep(30)
+            await interaction.delete_original_response()
+            
         except discord.Forbidden:
             await interaction.followup.send(
                 "❌ 蓄積先フォーラムへの投稿権限がありません。Botのチャンネル権限を確認してください。",

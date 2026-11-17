@@ -2,6 +2,7 @@ import os
 import discord
 from discord.ext import commands
 import config
+from cogs.library_desk import LibraryDeskView
 
 
 class LibraryBot(commands.Bot):
@@ -16,6 +17,9 @@ class LibraryBot(commands.Bot):
                 if filename.endswith(".py") and not filename.startswith("_"):
                     await self.load_extension(f"cogs.{filename[:-3]}")
                     print(f"Loaded Cog: {filename}")
+
+        # 再起動後も受付カウンターのボタンが動くように永続Viewを登録
+        self.add_view(LibraryDeskView())
 
         # スラッシュコマンドをDiscordに同期
         await self.tree.sync()
