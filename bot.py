@@ -8,6 +8,8 @@ from cogs.library_desk import LibraryDeskView
 class LibraryBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
+        intents.voice_states = True
+        intents.members = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
