@@ -1,3 +1,4 @@
+from utils.panel_reinstall import remember, tracked
 import asyncio
 import os
 import sqlite3
@@ -276,6 +277,10 @@ class IntroPanelView(discord.ui.View):
         custom_id="profile_intro:open_modal",
     )
     async def open_intro_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record = tracked("intro", interaction.guild_id) if interaction.guild_id else None
+        if record and (interaction.message is None or interaction.message.id != record[1]):
+            await interaction.response.send_message("このパネルは更新済みです。新しい自己紹介パネルをご利用ください。",ephemeral=True)
+            return
         await interaction.response.send_message(
             "まず**旧ランク**と**現ランク**をドロップダウンから選んで「次へ」を押してください。",
             view=IntroRankSelectView(),
@@ -309,7 +314,8 @@ class ProfileIntroCog(commands.Cog):
         )
 
         await interaction.response.send_message("✅ 自己紹介パネルを設置しました！（5秒後に消えます）", ephemeral=True)
-        await interaction.channel.send(embed=embed, view=IntroPanelView())
+        sent = await interaction.channel.send(embed=embed, view=IntroPanelView())
+        await asyncio.to_thread(remember, "intro", interaction.guild.id, interaction.channel.id, sent.id)
 
         await asyncio.sleep(5)
         await interaction.delete_original_response()

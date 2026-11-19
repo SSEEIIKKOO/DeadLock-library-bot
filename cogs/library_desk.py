@@ -1,3 +1,4 @@
+from utils.panel_reinstall import remember, tracked
 import asyncio
 import discord
 from discord import app_commands
@@ -16,6 +17,10 @@ class LibraryDeskView(discord.ui.View):
         custom_id="library_desk:post_build",
     )
     async def post_build_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record = tracked("desk", interaction.guild_id) if interaction.guild_id else None
+        if record and (interaction.message is None or interaction.message.id != record[1]):
+            await interaction.response.send_message("このパネルは更新済みです。新しい受付パネルをご利用ください。",ephemeral=True)
+            return
         build_cog = interaction.client.get_cog("BuildPostCog")
         if not build_cog:
             await interaction.response.send_message(
@@ -46,6 +51,10 @@ class LibraryDeskView(discord.ui.View):
         custom_id="library_desk:search_build",
     )
     async def search_build_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record = tracked("desk", interaction.guild_id) if interaction.guild_id else None
+        if record and (interaction.message is None or interaction.message.id != record[1]):
+            await interaction.response.send_message("このパネルは更新済みです。新しい受付パネルをご利用ください。",ephemeral=True)
+            return
         build_cog = interaction.client.get_cog("BuildPostCog")
         if not build_cog:
             await interaction.response.send_message(
@@ -90,7 +99,8 @@ class LibraryDeskCog(commands.Cog):
         embed.set_footer(text="※ ボタンを押した本人にのみ操作画面が表示されます")
 
         await interaction.response.send_message("✅ 受付カウンターを設置しました！（5秒後に消えます）", ephemeral=True)
-        await interaction.channel.send(embed=embed, view=LibraryDeskView())
+        sent = await interaction.channel.send(embed=embed, view=LibraryDeskView())
+        await asyncio.to_thread(remember, "desk", interaction.guild.id, interaction.channel.id, sent.id)
 
         await asyncio.sleep(5)
         await interaction.delete_original_response()

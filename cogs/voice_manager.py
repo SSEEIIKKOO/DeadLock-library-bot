@@ -363,7 +363,7 @@ class VoiceManager(commands.Cog):
         e.set_footer(text="オーナーと管理者だけが操作可能／空室30秒で自動削除")
         return e
 
-    async def refresh(self, cid: int):
+    async def refresh(self, cid: int, *, reinstall: bool = False):
         row = self.db.get(cid)
         if row is None:
             return
@@ -371,7 +371,7 @@ class VoiceManager(commands.Cog):
         channel = guild.get_channel(cid) if guild else None
         if not isinstance(channel, discord.VoiceChannel):
             return
-        if row["panel_message_id"]:
+        if row["panel_message_id"] and not reinstall:
             try:
                 msg = await channel.fetch_message(row["panel_message_id"])
                 await msg.edit(embed=self._embed(channel), view=ControlView(self, cid))
@@ -380,8 +380,16 @@ class VoiceManager(commands.Cog):
                 LOG.warning("管理パネルの編集不可、再作成: %s", cid)
         try:
             sent = await channel.send(embed=self._embed(channel), view=ControlView(self, cid), allowed_mentions=discord.AllowedMentions.none())
+            old_mid = row["panel_message_id"]
             self.db.update(cid, panel_message_id=sent.id)
             self.bot.add_view(ControlView(self, cid), message_id=sent.id)
+            if reinstall and old_mid:
+                try:
+                    old = await channel.fetch_message(old_mid)
+                    if old.author.id == self.bot.user.id:
+                        await old.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    LOG.warning("VC旧パネルの削除に失敗: %s", old_mid)
         except discord.HTTPException:
             LOG.exception("VC管理パネル送信失敗: %s", cid)
 
@@ -581,7 +589,7 @@ class VoiceManager(commands.Cog):
                     self.schedule_delete(channel.id)
                 else:
                     await self._transfer_if_missing(channel)
-                    await self.refresh(channel.id)
+                    await self.refresh(channel.id, reinstall=True)
             except Exception:
                 LOG.exception("VC起動時復旧失敗: %s", row["channel_id"])
 

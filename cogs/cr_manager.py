@@ -1,5 +1,6 @@
 """CR v0.4: A official rank, B custom-match ledger with decay, C admin adjustments."""
 from __future__ import annotations
+from utils.interaction_notices import temp_response, temp_followup
 import asyncio
 import logging
 import os
@@ -41,7 +42,7 @@ class CRSteamModal(discord.ui.Modal, title='Steam IDを登録してCRを計算')
         try:
             steam32 = cr_rating.steam_to_account_id(str(self.steam_id.value))
         except ValueError as exc:
-            await interaction.response.send_message(f'❌ {exc}', ephemeral=True)
+            await temp_response(interaction, f'❌ {exc}', ephemeral=True, delete_after=20)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         await self.manager.show_cr(interaction, entered_steam32=steam32)
@@ -54,14 +55,14 @@ class SplitRoster(discord.ui.Modal,title='登録済みCRで6対6チーム分け'
     async def on_submit(self,interaction:discord.Interaction):
         values=[x.strip().replace('<@!','').replace('<@','').replace('>','') for x in str(self.roster.value).splitlines() if x.strip()]
         if len(values)!=12 or any(not x.isdecimal() for x in values) or len(set(values))!=12:
-            await interaction.response.send_message('❌ 重複のない12人のDiscordユーザーIDを1行ずつ指定してください。',ephemeral=True)
+            await temp_response(interaction, '❌ 重複のない12人のDiscordユーザーIDを1行ずつ指定してください。',ephemeral=True, delete_after=20)
             return
         players=[]
         for value in values:
             did=int(value)
             row=await asyncio.to_thread(cr_store.get,did)
             if row is None:
-                await interaction.response.send_message(f'❌ <@{did}> はCR未登録です。',ephemeral=True)
+                await temp_response(interaction, f'❌ <@{did}> はCR未登録です。',ephemeral=True, delete_after=20)
                 return
             b = await asyncio.to_thread(cr_store.current_b, did)
             players.append(Player(str(did),round(row['a']+b+row['c']),row['confidence']))
@@ -110,17 +111,17 @@ class CustomResultModal(discord.ui.Modal, title='カスタム試合の結果を�
             result = await self.manager.record_result(self.match_key, self.winner, interaction.user.id, a, b)
             winner_name = 'A' if self.winner == 'A' else 'B'
             lines = [f'<@{did}> `{delta:+.2f}`' for did,delta in sorted(result['deltas'].items(), key=lambda v: -v[1])]
-            await interaction.followup.send(
+            await temp_followup(interaction, 
                 f'✅ 試合 `{self.match_key}` を記録しました。勝利チーム：**{winner_name}**\n'
                 f'勝利側獲得合計：**+{result["pool"]:.2f}** / 敗北側減少合計：**−{result["pool"]:.2f}**\n'
                 + '\n'.join(lines) + f'\n保管庫への同期：**{result["saved"]}/12人**'
                 + ('\n⚠️ 一部のDiscord保存に失敗しました。ローカルDBは保持しています。`/cr` 等で再同期してください。' if result['saved']<12 else ''),
-                ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                ephemeral=True, delete_after=20, allowed_mentions=discord.AllowedMentions.none())
         except (ValueError, sqlite3.Error) as exc:
-            await interaction.followup.send(f'❌ 試合の登録に失敗しました: {str(exc)[:200]}', ephemeral=True)
+            await temp_followup(interaction, f'❌ 試合の登録に失敗しました: {str(exc)[:200]}', ephemeral=True, delete_after=20)
         except Exception:
             LOG.exception('Custom CR result failed')
-            await interaction.followup.send('❌ 予期しないエラーです。ログを確認してください。', ephemeral=True)
+            await temp_followup(interaction, '❌ 予期しないエラーです。ログを確認してください。', ephemeral=True, delete_after=20)
 
 class CRManager(commands.Cog):
     def __init__(self,bot:commands.Bot):
@@ -189,14 +190,14 @@ class CRManager(commands.Cog):
                             winner: app_commands.Choice[str]):
         key = match_key.strip()
         if not 1 <= len(key) <= 80 or any(ch in key for ch in '\n\r'):
-            await interaction.response.send_message('❌ 試合IDは1〜80文字で指定してください。', ephemeral=True)
+            await temp_response(interaction, '❌ 試合IDは1〜80文字で指定してください。', ephemeral=True, delete_after=20)
             return
         await interaction.response.send_modal(CustomResultModal(self, key, winner.value))
 
     @custom_result.error
     async def custom_result_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.MissingPermissions):
-            await interaction.response.send_message('❌ サーバーの管理権限が必要です。', ephemeral=True)
+            await temp_response(interaction, '❌ サーバーの管理権限が必要です。', ephemeral=True, delete_after=20)
         else:
             LOG.exception('cr_custom_result error: %r', error)
 
@@ -230,13 +231,13 @@ class CRManager(commands.Cog):
                     if steam32 is None:
                         steam32 = await asyncio.to_thread(lookup_profile_steam, did)
                     if steam32 is None:
-                        await interaction.followup.send('❌ Steam IDが未登録です。もう一度 `/cr` を実行してください。', ephemeral=True)
+                        await temp_followup(interaction, '❌ Steam IDが未登録です。もう一度 `/cr` を実行してください。', ephemeral=True, delete_after=20)
                         return
                     row = await asyncio.to_thread(cr_store.register, did, steam32)
                     registered_now = True
                 except (ValueError, sqlite3.Error) as exc:
                     LOG.warning('CR registration failed for %s: %s', did, exc)
-                    await interaction.followup.send(f'❌ Steam IDの登録に失敗しました: {str(exc)[:160]}', ephemeral=True)
+                    await temp_followup(interaction, f'❌ Steam IDの登録に失敗しました: {str(exc)[:160]}', ephemeral=True, delete_after=20)
                     return
 
             last = float(row.get('updated_at') or 0)
@@ -269,9 +270,9 @@ class CRManager(commands.Cog):
             total = row['a'] + b + row['c']
             embed = discord.Embed(title=f'📊 {interaction.user.display_name} のカスタムレート',
                                   description=f'## {total:,.1f} CR', color=discord.Color.blue())
-            embed.add_field(name='A：公式戦評価', value=f'{row["a"]:,.1f}', inline=True)
-            embed.add_field(name='B：カスタム戦績', value=f'{b:+,.1f}', inline=True)
-            embed.add_field(name='C：管理者補正', value=f'{row["c"]:+,.1f}', inline=True)
+            embed.add_field(name='🏅 公式戦評価（ランク・直近戦績）', value=f'{row["a"]:,.1f}', inline=False)
+            embed.add_field(name='⚔️ カスタムマッチ戦績', value=f'{b:+,.1f}', inline=False)
+            embed.add_field(name='🛠️ 運営による実力補正', value=f'{row["c"]:+,.1f}', inline=False)
             embed.add_field(name='評価信頼度', value=f'{row["confidence"]}%', inline=True)
             if last := float(row.get('updated_at') or 0):
                 embed.add_field(name='公式戦評価の更新', value=f'<t:{int(last)}:R>', inline=True)
@@ -280,7 +281,7 @@ class CRManager(commands.Cog):
             if registered_now:
                 embed.add_field(name='Steam ID', value='✅ 初回登録しました（次回から入力不要）', inline=False)
             embed.set_footer(text='Aは原則24時間ごとに更新／Bは試合7日後から半減期14日で個別減衰')
-            await interaction.followup.send(content=(f'⚠️ {warning}' if warning else None), embed=embed, ephemeral=True)
+            await temp_followup(interaction, content=(f'⚠️ {warning}' if warning else None), embed=embed, ephemeral=True, delete_after=20)
 
     @app_commands.command(name='cr_register',description='自身のSteam IDをCRに登録します')
     @app_commands.describe(steam_id='SteamID3（短い数値）またはSteamID64（17桁）')
@@ -291,24 +292,24 @@ class CRManager(commands.Cog):
             async with self.lock(interaction.user.id):
                 row=await asyncio.to_thread(cr_store.register,interaction.user.id,sid)
                 saved,error=await self.persist(interaction.user.id)
-            message=f'✅ 登録しました。SteamID3: `{sid}`。Aは未評価の暫定1250点です。`/cr_update` で更新してください。'
+            message=f'✅ 登録しました。SteamID3: `{sid}`。公式戦評価は未評価の暫定1250点です。`/cr_update` で更新してください。'
             if not saved: message+=f'\n⚠️ Discord保管庫への保存失敗：{error}。ローカル記録は保持しています。'
-            await interaction.followup.send(message,ephemeral=True)
+            await temp_followup(interaction, message,ephemeral=True, delete_after=20)
         except (ValueError,Exception) as exc:
             LOG.exception('CR register failed')
-            await interaction.followup.send(f'❌ 登録失敗: {str(exc)[:150]}',ephemeral=True)
+            await temp_followup(interaction, f'❌ 登録失敗: {str(exc)[:150]}',ephemeral=True, delete_after=20)
 
-    @app_commands.command(name='cr_update',description='公式ランクと試合履歴からAを更新します（24時間ごと）')
+    @app_commands.command(name='cr_update',description='公式ランクと試合履歴から公式戦評価を更新します（24時間ごと）')
     async def update(self,interaction:discord.Interaction):
         await interaction.response.defer(ephemeral=True,thinking=True)
         did=interaction.user.id
         async with self.lock(did):
             row=await asyncio.to_thread(cr_store.get,did)
             if not row:
-                await interaction.followup.send('❌ `/cr_register` で先に登録してください。',ephemeral=True);return
+                await temp_followup(interaction, '❌ `/cr_register` で先に登録してください。',ephemeral=True, delete_after=20);return
             if row['updated_at'] and row['confidence'] > 50 and time.time()-row['updated_at']<86400:
                 hours=(86400-(time.time()-row['updated_at']))/3600
-                await interaction.followup.send(f'⏳ 次の更新まで約{hours:.1f}時間です。現在のA: {row["a"]:.1f}',ephemeral=True);return
+                await temp_followup(interaction, f'⏳ 次の更新まで約{hours:.1f}時間です。現在の公式戦評価: {row["a"]:.1f}',ephemeral=True, delete_after=20);return
             try:
                 sid=row['steam32']
                 rank=await self.api_json(f'{API}/v1/players/{sid}/rank')
@@ -318,16 +319,16 @@ class CRManager(commands.Cog):
                 a,conf,badge,note=cr_rating.estimate(rank,history,row)
                 # Do not mark failed/absent rank data as fresh A; allow retry later.
                 if conf==0 and row['confidence']==0:
-                    await interaction.followup.send('⚠️ 公式ランクが未確定です。A=1250の暫定値を維持します。',ephemeral=True);return
+                    await temp_followup(interaction, '⚠️ 公式ランクが未確定です。公式戦評価1250点の暫定値を維持します。',ephemeral=True, delete_after=20);return
                 row=await asyncio.to_thread(cr_store.update_rating,did,a,conf,badge,time.time())
                 saved,error=await self.persist(did)
                 b = await asyncio.to_thread(cr_store.current_b, did)
-                response=f'✅ A更新: **{a:.1f}**（信頼度 {conf}%）\n{note}\nCR合計: **{a+b+row["c"]:.1f}**'
+                response=f'✅ 公式戦評価を更新: **{a:.1f}**（信頼度 {conf}%）\n{note}\nCR合計: **{a+b+row["c"]:.1f}**'
                 if not saved:response+=f'\n⚠️ 保管庫への同期に失敗：{error}'
-                await interaction.followup.send(response,ephemeral=True)
+                await temp_followup(interaction, response,ephemeral=True, delete_after=20)
             except Exception as exc:
                 LOG.exception('CR update failed')
-                await interaction.followup.send(f'❌ 更新失敗。前回のCRを維持しています：{str(exc)[:160]}',ephemeral=True)
+                await temp_followup(interaction, f'❌ 更新失敗。前回のCRを維持しています：{str(exc)[:160]}',ephemeral=True, delete_after=20)
 
     @app_commands.command(name='cr_view',description='自身または指定ユーザーのCRを確認します')
     @app_commands.describe(member='省略した場合は自分')
@@ -335,34 +336,34 @@ class CRManager(commands.Cog):
         target=member or interaction.user
         row=await asyncio.to_thread(cr_store.get,target.id)
         if not row:
-            await interaction.response.send_message('❌ CRが未登録です。',ephemeral=True);return
+            await temp_response(interaction, '❌ CRが未登録です。',ephemeral=True, delete_after=20);return
         e=discord.Embed(title=f'📊 {target.display_name} のCR',color=discord.Color.blue())
         b = await asyncio.to_thread(cr_store.current_b, target.id)
-        e.description=f'**合計 {row["a"]+b+row["c"]:.1f} CR**\nA: {row["a"]:+.1f} ／ B: {b:+.1f} ／ C: {row["c"]:+.1f}\n評価信頼度: {row["confidence"]}%'
-        e.set_footer(text='Bは試合ごとに時間減衰。Cは管理者のみ変更できます。')
-        await interaction.response.send_message(embed=e,ephemeral=True)
+        e.description=f'**合計 {row["a"]+b+row["c"]:.1f} CR**\n🏅 公式戦評価: {row["a"]:+.1f}\n⚔️ カスタム戦績: {b:+.1f}\n🛠️ 運営補正: {row["c"]:+.1f}\n評価信頼度: {row["confidence"]}%'
+        e.set_footer(text='カスタム戦績は試合ごとに時間減衰。運営補正は管理者のみ変更できます。')
+        await temp_response(interaction, embed=e,ephemeral=True, delete_after=20)
 
-    @app_commands.command(name='cr_adjust',description='管理者がプレイヤーのC補正を加算または減算します')
-    @app_commands.describe(member='対象ユーザー',delta='Cへの加算量（マイナス可）',reason='変更理由（必須）')
+    @app_commands.command(name='cr_adjust',description='管理者がプレイヤーの実力補正を加算または減算します')
+    @app_commands.describe(member='対象ユーザー',delta='運営補正への加算量（マイナス可）',reason='変更理由（必須）')
     @app_commands.checks.has_permissions(manage_guild=True)
     async def adjust(self,interaction:discord.Interaction,member:discord.Member,delta:float,reason:str):
         if len(reason.strip())<3 or not -500<=delta<=500:
-            await interaction.response.send_message('❌ 理由は3文字以上、1回の変更量は±500以内にしてください。',ephemeral=True);return
+            await temp_response(interaction, '❌ 理由は3文字以上、1回の変更量は±500以内にしてください。',ephemeral=True, delete_after=20);return
         await interaction.response.defer(ephemeral=True)
         try:
             async with self.lock(member.id):
                 row=await asyncio.to_thread(cr_store.adjust,member.id,interaction.user.id,delta,reason.strip())
                 saved,error=await self.persist(member.id)
-            result=f'✅ {member.display_name} のC: **{row["c"]:+.1f}**（今回 {delta:+.1f}）\n理由：{discord.utils.escape_mentions(reason[:200])}'
+            result=f'✅ {member.display_name} の運営補正: **{row["c"]:+.1f}**（今回 {delta:+.1f}）\n理由：{discord.utils.escape_mentions(reason[:200])}'
             if not saved:result+=f'\n⚠️ 保管庫への同期失敗：{error}'
-            await interaction.followup.send(result,ephemeral=True)
+            await temp_followup(interaction, result,ephemeral=True, delete_after=20)
         except Exception as exc:
-            await interaction.followup.send(f'❌ {str(exc)[:180]}',ephemeral=True)
+            await temp_followup(interaction, f'❌ {str(exc)[:180]}',ephemeral=True, delete_after=20)
 
     @adjust.error
     async def adjust_error(self,interaction:discord.Interaction,error:app_commands.AppCommandError):
         if isinstance(error,app_commands.MissingPermissions):
-            await interaction.response.send_message('❌ サーバーの管理権限が必要です。',ephemeral=True)
+            await temp_response(interaction, '❌ サーバーの管理権限が必要です。',ephemeral=True, delete_after=20)
         else:
             LOG.exception('cr_adjust app error: %r',error)
 
@@ -372,15 +373,15 @@ class CRManager(commands.Cog):
         await interaction.response.defer(ephemeral=True,thinking=True)
         try:
             result=await cr_archive.restore_all(self.bot)
-            await interaction.followup.send(f'✅ 保管庫: {result["found"]}人 ／ 復元: {result["restored"]}人 ／ 失敗: {result["failed"]}人',ephemeral=True)
+            await temp_followup(interaction, f'✅ 保管庫: {result["found"]}人 ／ 復元: {result["restored"]}人 ／ 失敗: {result["failed"]}人',ephemeral=True, delete_after=20)
         except Exception as exc:
             LOG.exception('cr_restore failed')
-            await interaction.followup.send(f'❌ 復元失敗: {str(exc)[:160]}',ephemeral=True)
+            await temp_followup(interaction, f'❌ 復元失敗: {str(exc)[:160]}',ephemeral=True, delete_after=20)
 
     @restore.error
     async def restore_error(self,interaction:discord.Interaction,error:app_commands.AppCommandError):
         if isinstance(error,app_commands.MissingPermissions):
-            await interaction.response.send_message('❌ サーバーの管理権限が必要です。',ephemeral=True)
+            await temp_response(interaction, '❌ サーバーの管理権限が必要です。',ephemeral=True, delete_after=20)
 
     @app_commands.command(name='cr_split',description='登録済みの12人のCRで6対6に分けます')
     async def split(self,interaction:discord.Interaction):
