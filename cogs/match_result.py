@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 import json
 import os
+import time
 import aiohttp
 from urllib.parse import urlsplit
 import discord
@@ -9,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from cogs.profile_intro import load_players
 from utils.gdrive_uploader import upload_replay_bytes
+from utils.match_archive import get_archived, store_archived, read_local, delete_local_after_archive
 
 
 DEADLOCK_API_BASE = "https://" + "api.deadlock-api.com"
@@ -16,48 +18,129 @@ DEADLOCK_ASSETS_BASE = DEADLOCK_API_BASE
 
 CACHE_DIR = "data/match_cache"
 
-# API通信はブラウザを起動せずaiohttpで行う。
-# 429 / 500系の一時的なエラーのみ再試行し、403や404を無条件に再試行しない。
-async def fetch_json_via_browser(url: str) -> tuple[int, dict | list | None]:
-    timeout = aiohttp.ClientTimeout(total=25, connect=10)
-    headers = {"Accept": "application/json", "User-Agent": "DeadLockLibraryBot/1.0"}
+# metadata は API/S3 保存データ優先で検索する。Steam 側のIP制限は3回/時。
+# Steam問い合わせはBot内で控えめに2回/時に制限する（同一IPの他アプリは把握できない）。
+STEAM_WINDOW_SECONDS = 3600
+STEAM_LIMIT = 2
+STEAM_STATE_FILE = "data/match_steam_budget.json"
+_steam_lock = asyncio.Lock()
+_match_locks: dict[str, asyncio.Lock] = {}
 
+
+def _read_steam_state() -> dict:
+    try:
+        with open(STEAM_STATE_FILE, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            return obj
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"attempts": [], "blocked_until": 0}
+
+
+def _write_steam_state(obj: dict) -> None:
+    os.makedirs(os.path.dirname(STEAM_STATE_FILE), exist_ok=True)
+    tmp = STEAM_STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    os.replace(tmp, STEAM_STATE_FILE)
+
+
+def _quota_wait_seconds(obj: dict) -> int:
+    now = time.time()
+    attempts = [float(t) for t in obj.get("attempts", []) if isinstance(t, (float, int)) and now - float(t) < STEAM_WINDOW_SECONDS]
+    wait_block = max(0.0, float(obj.get("blocked_until", 0)) - now)
+    wait_budget = max(0.0, min(attempts) + STEAM_WINDOW_SECONDS - now) if len(attempts) >= STEAM_LIMIT else 0.0
+    return int(max(wait_block, wait_budget) + 0.999)
+
+
+def _parse_retry_seconds(headers, body: object) -> int:
+    # API の next_request_in / Retry-After を優先し、429 の場合だけ利用する。
+    candidates = []
+    try:
+        candidates.append(float(headers.get("Retry-After", 0)))
+    except (ValueError, TypeError):
+        pass
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            quota = error.get("quota")
+            if isinstance(quota, dict):
+                try:
+                    candidates.append(float(quota.get("next_request_in", 0)))
+                except (ValueError, TypeError):
+                    pass
+    return max(60, min(7200, int(max(candidates or [3600]))))
+
+
+async def fetch_json_via_browser(url: str) -> tuple[int, dict | list | None]:
+    """既存の呼び出し名を維持。HTTP 429は再試行しない。"""
+    status, data, _ = await _fetch_json(url)
+    return status, data
+
+
+async def _fetch_json(url: str) -> tuple[int, dict | list | None, int]:
+    timeout = aiohttp.ClientTimeout(total=25, connect=10)
+    headers = {"Accept": "application/json", "User-Agent": "DeadLockLibraryBot/1.1"}
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 async with session.get(url) as resp:
                     status = resp.status
+                    raw = await resp.text(errors="replace")
+                    try:
+                        data = json.loads(raw)
+                    except (ValueError, TypeError):
+                        data = None
                     if status == 200:
-                        try:
-                            data = await resp.json(content_type=None)
-                        except (aiohttp.ContentTypeError, json.JSONDecodeError, UnicodeDecodeError) as e:
-                            print(f"[DeadlockAPI] Invalid JSON: url={url}, error={e}")
-                            return 502, None
-                        if not isinstance(data, (dict, list)):
-                            print(f"[DeadlockAPI] Unexpected JSON format: url={url}")
-                            return 502, None
-                        return 200, data
+                        if isinstance(data, (dict, list)):
+                            return 200, data, 0
+                        print(f"[DeadlockAPI] JSON形式が不正: {url}")
+                        return 502, None, 0
+                    print(f"[DeadlockAPI] HTTP {status}: {url}, body={raw[:240]!r}")
+                    if status == 429:
+                        return 429, None, _parse_retry_seconds(resp.headers, data)
+                    if status not in (500, 502, 503, 504) or attempt == 1:
+                        return status, None, 0
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                print(f"[DeadlockAPI] 通信エラー: {url}: {exc!r}")
+                if attempt == 1:
+                    return 0, None, 0
+            await asyncio.sleep(1.5)
+    return 0, None, 0
 
-                    body = (await resp.text(errors="replace"))[:300].replace("\n", " ")
-                    print(f"[DeadlockAPI] HTTP {status}: url={url}, body={body!r}")
-                    if status not in (429, 500, 502, 503, 504) or attempt == 2:
-                        return status, None
 
-                    retry_after = resp.headers.get("Retry-After")
-                    delay = min(15.0, 2.0 ** attempt)
-                    if retry_after:
-                        try:
-                            delay = min(30.0, max(1.0, float(retry_after)))
-                        except ValueError:
-                            pass
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                print(f"[DeadlockAPI] Request error ({attempt + 1}/3): url={url}, error={e!r}")
-                if attempt == 2:
-                    return 0, None
-                delay = 2.0 ** attempt
-            await asyncio.sleep(delay)
+async def _get_match_metadata(match_id: str) -> tuple[int, dict | None, int, str]:
+    """ローカル→API/S3→Steam(1IPにつきBot内2回/時) の順。"""
+    cache_url = f"{DEADLOCK_API_BASE}/v1/matches/{match_id}/metadata?disable_steam=true"
+    status, data, retry = await _fetch_json(cache_url)
+    if status == 200 and isinstance(data, dict):
+        return status, data, 0, "api-cache"
+    # 保存データがない場合のみSteamフォールバックを許す。
+    # 429/5xx/認証エラーでのSteamフォールバックは行わない。
+    if status not in (404, 422, 424):
+        return status, None, retry, "cache-error"
 
-    return 0, None
+    async with _steam_lock:
+        state = _read_steam_state()
+        now = time.time()
+        state["attempts"] = [float(t) for t in state.get("attempts", [])
+                             if isinstance(t, (int, float)) and now - float(t) < STEAM_WINDOW_SECONDS]
+        wait = _quota_wait_seconds(state)
+        if wait:
+            return 429, None, wait, "local-limit"
+        # 失敗しても試行として記録し、再起動後も安全側に倒す。
+        state["attempts"].append(now)
+        _write_steam_state(state)
+        steam_url = f"{DEADLOCK_API_BASE}/v1/matches/{match_id}/metadata"
+        status, data, retry = await _fetch_json(steam_url)
+        if status == 429:
+            state = _read_steam_state()
+            state["blocked_until"] = max(float(state.get("blocked_until", 0)), time.time() + retry)
+            _write_steam_state(state)
+        if status == 200 and isinstance(data, dict):
+            return 200, data, 0, "steam"
+        return status, None, retry, "steam-error"
 
 
 def _validated_replay_url(value: object) -> str | None:
@@ -197,10 +280,28 @@ class ReplayCaptionModal(discord.ui.Modal, title="リプレイを図書館に登
                 import logging
                 logging.exception('Drive caption append failed: match=%s', match_id)
                 # Search still works from SQLite; do not mark the submission failed.
+            # The public donation is already complete; archive failure must not delete cache
+            # or misreport the existing public forum post as failed.
+            archive_note = ''
+            try:
+                local_data = await asyncio.to_thread(read_local, match_id)
+                if local_data is not None:
+                    archived = await store_archived(interaction.client, match_id, local_data)
+                    if archived:
+                        await asyncio.to_thread(delete_local_after_archive, match_id, local_data)
+                        archive_note = '\n🔒 リザルトJSONを非公開保管庫へ保存しました。'
+                elif await get_archived(interaction.client, match_id) is not None:
+                    archive_note = '\n🔒 リザルトJSONは保管済みです。'
+                else:
+                    archive_note = '\n⚠️ ローカルJSONが見つからず、保管庫への移行は行われませんでした。'
+            except Exception as archive_exc:
+                import logging
+                logging.exception('Match archive failed after forum donation: match=%s', match_id)
+                archive_note = '\n⚠️ リザルトJSONの非公開保管に失敗しました。ローカルキャッシュは保持します。'
             reused_note = '（Google Driveの保存済みファイルを再利用）' if drive_reused else '（新規にDriveへ保存）'
             await interaction.followup.send(
                 f"✅ 図書館にリプレイを登録しました！{reused_note}\n"
-                f"📚 投稿: {thread.jump_url}\n💾 Drive: {drive_link}", ephemeral=True)
+                f"📚 投稿: {thread.jump_url}\n💾 Drive: {drive_link}{archive_note}", ephemeral=True)
         except Exception as exc:
             import logging
             logging.exception('Replay library submission failed: match=%s', match_id)
@@ -274,6 +375,40 @@ class MatchResultCog(commands.Cog):
 
         return names_map
 
+    @app_commands.command(name="match_archive_backfill", description="既存の試合JSONキャッシュを非公開保管庫へ移行（管理者専用）")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(limit="今回確認するキャッシュ数（最大50）")
+    async def match_archive_backfill(self, interaction: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 20):
+        # default_permissions alone is not an authorization check.
+        if not interaction.guild or not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("管理者のみ利用できます。", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        from pathlib import Path
+        scanned = done = failures = 0
+        for path in sorted(Path(CACHE_DIR).glob('*.json')):
+            if scanned >= limit:
+                break
+            match_id = path.stem
+            if not match_id.isdecimal():
+                continue
+            scanned += 1
+            try:
+                # リプレイ寄贈の有無を問わず、既存の試合キャッシュを保管する。
+                data = await asyncio.to_thread(read_local, match_id)
+                if data is None:
+                    continue
+                if await store_archived(self.bot, match_id, data):
+                    await asyncio.to_thread(delete_local_after_archive, match_id, data)
+                    done += 1
+            except Exception:
+                import logging
+                logging.exception('Archive backfill failed match=%s', match_id)
+                failures += 1
+        await interaction.followup.send(
+            f"照合: {scanned}件 / 非公開保管できた試合: {done}件 / エラー: {failures}件\n"
+            "※リプレイ寄贈の有無にかかわらず保管します。保管・検証成功後だけローカルJSONを削除します。", ephemeral=True)
+
     @app_commands.command(name="match", description="マッチIDからDeadlockの試合リザルトを表示します")
     @app_commands.describe(match_id="試合のマッチID（数字）を入力してください")
     async def match_result(self, interaction: discord.Interaction, match_id: str):
@@ -296,33 +431,42 @@ class MatchResultCog(commands.Cog):
             if not self.hero_names:
                 await self.ensure_hero_names()
 
-            if os.path.exists(cache_path):
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                url = f"{DEADLOCK_API_BASE}/v1/matches/{clean_id}/metadata"
-                status, data = await fetch_json_via_browser(url)
-
-                if status == 404:
-                    await interaction.followup.send(
-                        f"📭 マッチID `{clean_id}` のデータはAPIから返されませんでした。"
-                        "試合が未登録・取得待ちの可能性があります。"
-                    )
-                    return
-                if status != 200 or not isinstance(data, dict):
-                    advice = (
-                        "アクセス拒否の可能性があります。APIの利用条件・認証設定をご確認ください。" if status in (401, 403)
-                        else "アクセス制限中です。しばらく時間を置いてください。" if status == 429
-                        else "APIまたは通信の一時的な障害の可能性があります。" if status in (0, 500, 502, 503, 504)
-                        else "サーバーログの詳細を確認してください。"
-                    )
-                    await interaction.followup.send(
-                        f"⚠️ データ取得に失敗しました（HTTP: `{status}`）。{advice}"
-                    )
-                    return
-
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False)
+            # 同じmatch_idの並行リクエストが重複してAPIを消費しないようにする。
+            lock = _match_locks.setdefault(clean_id, asyncio.Lock())
+            async with lock:
+                if os.path.exists(cache_path):
+                    try:
+                        with open(cache_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except (OSError, ValueError):
+                        data = None
+                if not isinstance(data, dict):
+                    data = await get_archived(self.bot, clean_id)
+                    if isinstance(data, dict):
+                        print(f"[MatchResultCog] Match {clean_id}: source=discord-archive")
+                if not isinstance(data, dict):
+                    status, data, retry, source = await _get_match_metadata(clean_id)
+                    if status != 200 or not isinstance(data, dict):
+                        if source == "local-limit":
+                            explanation = f"未保存の試合です。BotのSteam問い合わせ上限に達しました。約{max(1, (retry + 59) // 60)}分後に再試行してください。"
+                        elif status == 429:
+                            explanation = f"APIのアクセス制限中です。約{max(1, (retry + 59) // 60)}分後に再試行してください。"
+                        elif status in (404, 422, 424):
+                            explanation = "試合がAPIにまだ保存されていないか、試合IDが見つかりません。"
+                        elif status in (401, 403):
+                            explanation = "APIへのアクセスが拒否されました。"
+                        else:
+                            explanation = "APIまたは通信が一時的に利用できません。"
+                        await interaction.followup.send(
+                            f"⚠️ マッチID `{clean_id}` の取得に失敗しました（HTTP `{status}`）。\n{explanation}"
+                        )
+                        return
+                    # 一時ファイルに書いてから原子的に置き換える。
+                    tmp_path = cache_path + ".tmp"
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False)
+                    os.replace(tmp_path, cache_path)
+                    print(f"[MatchResultCog] Match {clean_id}: source={source}")
 
             info = data.get("match_info", data)
             players = info.get("players", [])
@@ -412,10 +556,32 @@ class MatchResultCog(commands.Cog):
         )
         embed.set_footer(text="Powered by deadlock-api.com")
 
+        # 先にリザルトを表示する。保管庫の障害で /match 自体を失敗させない。
         await interaction.followup.send(
             embed=embed,
             view=ReplaySaveView(clean_id),
         )
+
+        # /match の成功を契機に全試合を保管。リプレイ寄贈操作は不要。
+        # store_archived は1試合1件の重複防止・Discord添付の再取得検証・
+        # SQLite登録まで実施する。成功時だけ一致するローカルJSONを削除する。
+        # 保存処理はこのコマンド内で完了させ、バックグラウンドには放置しない。
+        try:
+            if not await store_archived(self.bot, clean_id, data):
+                raise RuntimeError("保管先への保存を確認できませんでした")
+            await asyncio.to_thread(delete_local_after_archive, clean_id, data)
+            print(f"[MatchResultCog] Match {clean_id}: Discord非公開保管庫へ保存確認済み")
+        except Exception:
+            import logging
+            logging.exception("Match archive failed after /match: match=%s", clean_id)
+            try:
+                await interaction.followup.send(
+                    "⚠️ リザルトは表示できましたが、非公開保管庫への保存に失敗しました。"
+                    "ローカルキャッシュは削除していません。管理者はBotのログを確認してください。",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                logging.exception("Could not notify archive failure: match=%s", clean_id)
 
 
 async def setup(bot: commands.Bot):
