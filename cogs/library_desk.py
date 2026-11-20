@@ -1,4 +1,5 @@
 from utils.panel_reinstall import remember, tracked
+from utils.deployment_scope import is_main_guild
 import asyncio
 import discord
 from discord import app_commands
@@ -17,6 +18,9 @@ class LibraryDeskView(discord.ui.View):
         custom_id="library_desk:post_build",
     )
     async def post_build_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_main_guild(interaction.guild_id):
+            await interaction.response.send_message("本番メインサーバー専用の操作です。", ephemeral=True)
+            return
         record = tracked("desk", interaction.guild_id) if interaction.guild_id else None
         if record and (interaction.message is None or interaction.message.id != record[1]):
             await interaction.response.send_message("このパネルは更新済みです。新しい受付パネルをご利用ください。",ephemeral=True)
@@ -51,6 +55,9 @@ class LibraryDeskView(discord.ui.View):
         custom_id="library_desk:search_build",
     )
     async def search_build_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_main_guild(interaction.guild_id):
+            await interaction.response.send_message("本番メインサーバー専用の操作です。", ephemeral=True)
+            return
         record = tracked("desk", interaction.guild_id) if interaction.guild_id else None
         if record and (interaction.message is None or interaction.message.id != record[1]):
             await interaction.response.send_message("このパネルは更新済みです。新しい受付パネルをご利用ください。",ephemeral=True)
@@ -87,6 +94,12 @@ class LibraryDeskCog(commands.Cog):
     @app_commands.command(name="setup_desk", description="このチャンネルにビルド受付カウンター（常設パネル）を設置します")
     @app_commands.default_permissions(administrator=True)
     async def setup_desk(self, interaction: discord.Interaction):
+        if interaction.guild is None or not is_main_guild(interaction.guild_id):
+            await interaction.response.send_message("本番メインサーバーで実行してください。", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("通常のテキストチャンネルで実行してください。", ephemeral=True)
+            return
         embed = discord.Embed(
             title="📚 Deadlock Library 受付カウンター",
             description=(
@@ -98,12 +111,17 @@ class LibraryDeskCog(commands.Cog):
         )
         embed.set_footer(text="※ ボタンを押した本人にのみ操作画面が表示されます")
 
-        await interaction.response.send_message("✅ 受付カウンターを設置しました！（5秒後に消えます）", ephemeral=True)
-        sent = await interaction.channel.send(embed=embed, view=LibraryDeskView())
+        await interaction.response.defer(ephemeral=True)
+        try:
+            sent = await interaction.channel.send(embed=embed, view=LibraryDeskView())
+        except discord.Forbidden:
+            await interaction.followup.send("❌ このチャンネルへアクセス・投稿できません。Botのチャンネル権限を確認してください。", ephemeral=True)
+            return
+        except discord.HTTPException as exc:
+            await interaction.followup.send(f"❌ パネル設置失敗（Discord HTTP {exc.status}）。ログをご確認ください。", ephemeral=True)
+            return
         await asyncio.to_thread(remember, "desk", interaction.guild.id, interaction.channel.id, sent.id)
-
-        await asyncio.sleep(5)
-        await interaction.delete_original_response()
+        await interaction.followup.send("✅ 受付カウンターを設置しました。", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

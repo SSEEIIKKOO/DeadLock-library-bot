@@ -5,6 +5,7 @@ import config
 from cogs.library_desk import LibraryDeskView
 from cogs.profile_intro import IntroPanelView
 from utils.panel_reinstall import reinstall_for_guild
+from utils.deployment_scope import is_main_guild
 
 
 class LibraryBot(commands.Bot):
@@ -34,6 +35,8 @@ class LibraryBot(commands.Bot):
             self._panels_reinstalled = True
             async def _run():
                 for guild in self.guilds:
+                    if not is_main_guild(guild.id):
+                        continue
                     for kind in ("desk", "intro"):
                         try:
                             await reinstall_for_guild(self, guild, kind)

@@ -41,8 +41,9 @@ def panel_embed(kind: str) -> discord.Embed:
             "🔍 **ビルドを探す**：ヒーローやタグから登録済みビルドを検索して表示"),color=discord.Color.blue())
         e.set_footer(text="※ ボタンを押した本人にのみ操作画面が表示されます")
         return e
-    return discord.Embed(title="🪪 メンバー自己紹介 ＆ SteamID連携", description=(
-        "下のボタンを押すと、ランク選択のあとに自己紹介フォームが開きます！\n\n"
+    return discord.Embed(title="📝 プロフィール登録・編集", description=(
+        "下のボタンから登録・編集できます。自己紹介はメインサーバーのアドレス帳に公開され、再登録時は同じ投稿を更新します。\n"
+        "データのバックアップは図書館サーバーの管理者専用保管チャンネルに保存します。\n\n"
         "📋 **入力する内容**\n・旧ランク / 現ランク（ドロップダウン選択）\n"
         "・プレイヤー名（Steam名）\n・呼んでほしい名前\n"
         "・Steamフレンドコード（任意・`/match` のリザルトに名前が出ます）\n"
