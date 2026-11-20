@@ -321,11 +321,29 @@ class IntroModal(discord.ui.Modal, title="メンバー自己紹介フォーム")
 # ==========================================
 # Step 1: 旧ランク・現ランク選択ドロップダウン UI
 # ==========================================
-def build_rank_options() -> list[discord.SelectOption]:
+# 2026年7月30日のランク制度更新より前のランク名（低い順）
+# 現ランクは config.DEADLOCK_RANKS に定義された新制度の名称を利用します。
+OLD_DEADLOCK_RANKS = [
+    "Initiate（イニシエイト）",
+    "Seeker（シーカー）",
+    "Alchemist（アルケミスト）",
+    "Arcanist（アルカニスト）",
+    "Ritualist（リチュアリスト）",
+    "Emissary（エミッサリー）",
+    "Archon（アルコン）",
+    "Oracle（オラクル）",
+    "Phantom（ファントム）",
+    "Ascendant（アセンダント）",
+    "Eternus（エターナス）",
+]
+
+
+def build_rank_options(*, old_system: bool = False) -> list[discord.SelectOption]:
     options = [
         discord.SelectOption(label="未ランク / 未プレイ / 非公開", value="未ランク・非公開"),
     ]
-    for rank in config.DEADLOCK_RANKS:
+    ranks = OLD_DEADLOCK_RANKS if old_system else config.DEADLOCK_RANKS
+    for rank in ranks:
         options.append(discord.SelectOption(label=rank, value=rank))
     return options[:25]
 
@@ -333,10 +351,10 @@ def build_rank_options() -> list[discord.SelectOption]:
 class OldRankSelect(discord.ui.Select):
     def __init__(self):
         super().__init__(
-            placeholder="① 旧ランクを選択してください...",
+            placeholder="① 旧制度（2026年7月以前）のランク...",
             min_values=1,
             max_values=1,
-            options=build_rank_options(),
+            options=build_rank_options(old_system=True),
             row=0,
         )
 
@@ -349,7 +367,7 @@ class OldRankSelect(discord.ui.Select):
 class CurrentRankSelect(discord.ui.Select):
     def __init__(self):
         super().__init__(
-            placeholder="② 現ランクを選択してください...",
+            placeholder="② 現行制度のランクを選択...",
             min_values=1,
             max_values=1,
             options=build_rank_options(),
@@ -400,7 +418,7 @@ class IntroPanelView(discord.ui.View):
             await interaction.response.send_message("このパネルは更新済みです。新しい自己紹介パネルをご利用ください。",ephemeral=True)
             return
         await interaction.response.send_message(
-            "まず**旧ランク**と**現ランク**をドロップダウンから選んで「次へ」を押してください。",
+            "**旧ランク（2026年7月30日より前）**と**現ランク（新制度）**を選び、「次へ」を押してください。",
             view=IntroRankSelectView(interaction.client),
             ephemeral=True,
         )
@@ -483,7 +501,7 @@ class ProfileIntroCog(commands.Cog):
                 "✅ 入力した自己紹介は、メインサーバーのアドレス帳に公開されます。\n"
                 "🔒 データのバックアップは図書館サーバー内の管理者専用チャンネルへ保存されます。\n\n"
                 "📋 **入力する内容**\n"
-                "・旧ランク / 現ランク（ドロップダウン選択）\n"
+                "・旧制度のランク（2026/7/30より前） / 現ランク（ドロップダウン選択）\n"
                 "・プレイヤー名（Steam名）\n"
                 "・呼んでほしい名前\n"
                 "・Steamフレンドコード（任意・`/match` のリザルトに名前が出ます）\n"
