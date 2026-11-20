@@ -269,8 +269,7 @@ class BuildPostCog(commands.Cog):
 
         forums.sort(key=lambda c: c.name)
 
-        if config.TEST_HERO_LIMIT > 0:
-            forums = forums[:config.TEST_HERO_LIMIT]
+        # 本番運用では全ヒーローを表示。旧TEST_HERO_LIMITは参照しない。
 
         self.hero_forums = forums
 
