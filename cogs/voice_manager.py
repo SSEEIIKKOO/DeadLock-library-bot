@@ -589,7 +589,7 @@ class VoiceManager(commands.Cog):
                     self.schedule_delete(channel.id)
                 else:
                     await self._transfer_if_missing(channel)
-                    await self.refresh(channel.id, reinstall=True)
+                    await self.refresh(channel.id, reinstall=False)
             except Exception:
                 LOG.exception("VC起動時復旧失敗: %s", row["channel_id"])
 

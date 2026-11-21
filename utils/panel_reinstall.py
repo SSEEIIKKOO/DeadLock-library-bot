@@ -89,27 +89,24 @@ async def _discover(guild: discord.Guild, kind: str, bot_id: int):
 
 
 async def reinstall_for_guild(bot: discord.Client, guild: discord.Guild, kind: str):
+    """Only edit the existing panel; do not post a new one on startup."""
     record = await asyncio.to_thread(tracked, kind, guild.id)
     if record is None:
-        record = await _discover(guild, kind, bot.user.id)
-    if record is None:
-        LOG.info('Panel %s not found for guild %s. Run /setup_%s once.', kind,guild.id, 'desk' if kind=='desk' else 'intro')
+        LOG.info('Panel %s not registered in guild %s; use /setup_%s once',kind,guild.id,kind)
         return
     channel = guild.get_channel(record[0])
     if not isinstance(channel, discord.TextChannel):
-        LOG.warning('Panel channel missing %s in %s', kind, guild.id)
+        LOG.warning('Panel channel missing: %s', record[0])
         return
     try:
-        # Create the new panel before removing the existing one.
-        posted = await channel.send(embed=panel_embed(kind), view=panel_view(kind), allowed_mentions=discord.AllowedMentions.none())
-        await asyncio.to_thread(remember, kind, guild.id, channel.id, posted.id)
-    except (discord.Forbidden,discord.HTTPException):
-        LOG.exception('Panel %s could not be reinstalled', kind)
-        return
-    try:
-        old = await channel.fetch_message(record[1])
-        if old.author.id == bot.user.id and is_target(old,kind,bot.user.id):
-            await old.delete()
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-        LOG.warning('Previous panel could not be removed: %s', record[1])
-    LOG.info('Reinstalled %s panel in %s: %s',kind,channel.id,posted.id)
+        msg = await channel.fetch_message(record[1])
+        if msg.author.id != bot.user.id or not is_target(msg,kind,bot.user.id):
+            LOG.warning('Tracked %s message is not our panel; ignoring', kind)
+            return
+        await msg.edit(embed=panel_embed(kind), view=panel_view(kind),
+                       allowed_mentions=discord.AllowedMentions.none())
+        LOG.info('Edited %s panel message %s', kind, msg.id)
+    except discord.NotFound:
+        LOG.warning('Panel %s deleted; use /setup_%s manually',kind,kind)
+    except (discord.Forbidden, discord.HTTPException):
+        LOG.exception('Could not edit existing %s panel',kind)

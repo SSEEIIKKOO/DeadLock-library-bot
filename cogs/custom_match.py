@@ -513,7 +513,7 @@ class CustomMatchCog(commands.Cog):
         if isinstance(channel,discord.TextChannel):
             try:
                 async with self.lock(channel.guild.id):
-                    await self.refresh_panel(channel.guild, reinstall=True)
+                    await self.refresh_panel(channel.guild, reinstall=False)
             except Exception:LOG.exception('Could not restore custom lobby panel')
 
 

@@ -1,18 +1,28 @@
-# 環境変数（トークンやサーバーIDは絶対に上げない）
+# Secrets
 .env
+.env.*
+!.env.example
 *.env
-
-# Pythonのキャッシュファイル（自動生成されるゴミファイル）
-__pycache__/
-*.py[cod]
-*$py.class
-
-# 仮想環境フォルダ
-venv/
-.venv/
-
-# エディタ設定（VS Codeなど）
-.vscode/
-data/
 client_secret.json
 token.json
+credentials.json
+*secret*.json
+# Local databases / backups / browser profiles
+data/
+backup/
+backups/
+*.bak
+*.backup
+*.log
+*.db
+*.sqlite3
+chrome_bot_profile/
+**/chrome_bot_profile/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.vscode/
+.idea/
