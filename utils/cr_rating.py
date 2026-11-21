@@ -56,6 +56,13 @@ def history_correction(entries: list) -> tuple[float, int]:
         mode = str(e.get('match_mode', '')).lower()
         if mode in ('private_lobby', 'coop_bot', 'tutorial'):
             continue
+        # Street Brawl は通常戦と勝敗・ルールが異なる。
+        # /v1/players/{account_id}/match-history の game_mode は数値 4。
+        # モード値が欠けている古い履歴は後方互換のため従来どおり扱う。
+        # その場合、ブロウルの完全排除は保証できない。
+        raw_game_mode = e.get('game_mode')
+        if raw_game_mode is not None and str(raw_game_mode).strip().lower() in ('4', 'street_brawl'):
+            continue
         won = e.get('won')
         if type(won) is bool:
             win = won

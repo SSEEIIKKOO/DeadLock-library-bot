@@ -11,6 +11,7 @@ from discord.ext import commands
 from cogs.profile_intro import load_players
 from utils.gdrive_uploader import upload_replay_bytes
 from utils.match_archive import get_archived, store_archived, read_local, delete_local_after_archive
+from utils.street_brawl_result import is_street_brawl, street_brawl_description
 
 
 DEADLOCK_API_BASE = "https://" + "api.deadlock-api.com"
@@ -486,6 +487,7 @@ class MatchResultCog(commands.Cog):
             )
             return
 
+        brawl = is_street_brawl(info)
         duration_sec = info.get("duration_s", 0)
         minutes, seconds = divmod(int(duration_sec), 60)
         duration_str = f"{minutes}分{seconds:02d}秒"
@@ -527,7 +529,11 @@ class MatchResultCog(commands.Cog):
                 )
                 label = f"**{hero_name}** ({player_name})" if player_name else f"**{hero_name}**"
 
-            line = f"{label}：`{kills}/{deaths}/{assists}` ｜ 💰`{souls_k}`"
+            # ブロウルは両チーム全員が同じnet_worthを持つ場合があり、
+            # 通常戦と同じ「獲得ソウル」の意味として表示しない。
+            line = f"{label}：`{kills}/{deaths}/{assists}`"
+            if not brawl:
+                line += f" ｜ 💰`{souls_k}`"
 
             if p.get("team") == 0:
                 team_hidden_king.append(line)
@@ -536,10 +542,12 @@ class MatchResultCog(commands.Cog):
 
 
         embed = discord.Embed(
-            title=f"⚔️ Deadlock 試合リザルト（Match ID: {clean_id}）",
+            title=(f"🥊 Deadlock ストリートブロウル（Match ID: {clean_id}）"
+                   if brawl else f"⚔️ Deadlock 試合リザルト（Match ID: {clean_id}）"),
             description=(
                 f"**結果**: {winner_str}\n"
                 f"**試合時間**: {duration_str}"
+                + ("\n" + street_brawl_description(info) if brawl else "")
             ),
             color=embed_color,
         )

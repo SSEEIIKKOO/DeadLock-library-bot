@@ -1,4 +1,4 @@
-"""Deadlock 6v6 custom-match lobby for discord.py 2.x.
+"""Deadlock 6v6 / Street Brawl 4v4 custom-match lobby for discord.py 2.x.
 
 Per-guild one active lobby; pending results do not occupy the lobby slot.
 The existing CRManager handles CR snapshots. This Cog only calls its known APIs.
@@ -27,6 +27,18 @@ TEAM_B_VC = int(os.getenv('CUSTOM_TEAM_B_VC_ID', '0'))
 RECRUIT_TIMEOUT = 60 * 60
 READY_TIMEOUT = 15 * 60
 PLAY_TIMEOUT = 3 * 60 * 60
+
+
+def game_mode(s):
+    return s.get('game_mode', 'normal')
+
+
+def capacity(s):
+    return 8 if game_mode(s) == 'street_brawl' else 12
+
+
+def mode_label(s):
+    return '🥊 ストリートブロウル（4対4）' if game_mode(s) == 'street_brawl' else '⚔️ 通常マッチ（6対6）'
 
 
 def match_key(s):
@@ -85,9 +97,13 @@ class CustomLobbyView(discord.ui.View):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @discord.ui.button(label='募集開始', style=discord.ButtonStyle.success, custom_id='deadlock_custom:start', row=0)
+    @discord.ui.button(label='通常6対6募集', style=discord.ButtonStyle.success, custom_id='deadlock_custom:start', row=0)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.action(interaction, 'start')
+
+    @discord.ui.button(label='ブロウル4対4募集', style=discord.ButtonStyle.success, custom_id='deadlock_custom:start_brawl', row=0)
+    async def start_brawl(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.action(interaction, 'start_brawl')
 
     @discord.ui.button(label='参加', style=discord.ButtonStyle.primary, custom_id='deadlock_custom:join', row=0)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -149,13 +165,14 @@ class CustomMatchCog(commands.Cog):
     def panel_embed(self, s):
         e = discord.Embed(title='⚔️ Deadlock カスタムマッチ募集', color=discord.Color.blurple())
         if s is None:
-            e.description = '現在の募集はありません。\n**「募集開始」** から誰でも募集できます。定員は12人です。'
+            e.description = '現在の募集はありません。\n**「通常6対6募集」または「ブロウル4対4募集」から開始できます。'
         else:
             state_names = {'recruiting':'募集中', 'ready':'チーム確認待ち', 'playing':'試合進行中'}
             e.description = (f'**開催ID:** `{match_key(s)}`\n'
                              f'**状態:** {state_names.get(s["state"],s["state"])}\n'
+                             f'**モード:** {mode_label(s)}\n'
                              f'**募集主:** <@{s["host_id"]}>\n'
-                             f'**参加者:** **{len(s["roster"])}/12人**')
+                             f'**参加者:** **{len(s["roster"])}/{capacity(s)}人**')
             if s['state'] == 'recruiting':
                 e.add_field(name='参加者',value='\n'.join(f'{i+1}. <@{did}>' for i,did in enumerate(s['roster'])) or 'なし',inline=False)
                 e.add_field(name='放置時の終了',value=f'<t:{int(s["changed_at"]+RECRUIT_TIMEOUT)}:R>',inline=False)
@@ -219,27 +236,27 @@ class CustomMatchCog(commands.Cog):
                 s=await asyncio.to_thread(store.active,interaction.guild.id)
                 did=interaction.user.id
                 admin=is_admin(interaction)
-                if what=='start':
+                if what in ('start', 'start_brawl'):
                     if s: raise ValueError('募集・試合が既に存在します。')
                     if await asyncio.to_thread(profile,did) is None:
                         raise ValueError('最初に `/cr` を実行してCRを登録してください。')
-                    s=await asyncio.to_thread(store.create,interaction.guild.id,did)
-                    message='✅ 募集を開始しました。募集主は参加者に自動登録されます。'
+                    s=await asyncio.to_thread(store.create,interaction.guild.id,did,('street_brawl' if what=='start_brawl' else 'normal'))
+                    message=f'✅ {mode_label(s)} の募集を開始しました。募集主は自動登録されます。'
                 elif s is None:
                     raise ValueError('現在募集中のカスタムはありません。')
                 elif what=='join':
                     if s['state']!='recruiting': raise ValueError('現在は参加受付中ではありません。')
                     if did in s['roster']: raise ValueError('すでに参加しています。')
                     if await asyncio.to_thread(profile,did) is None: raise ValueError('先に `/cr` で登録してください。')
-                    if len(s['roster'])>=12: raise ValueError('定員に達しています。')
+                    if len(s['roster'])>=capacity(s): raise ValueError('定員に達しています。')
                     s['roster'].append(did)
                     s['changed_at']=time.time()
-                    if len(s['roster'])==12:
+                    if len(s['roster'])==capacity(s):
                         s['teams']=await asyncio.to_thread(build_teams,s['roster'])
                         s['state']='ready';s['ready_at']=time.time();s['candidate_index']=0;s['rerolls']=0
-                        message='✅ 12人揃いました。CRによるチーム分けを表示しました。募集主が確定してください。'
+                        message=f'✅ {capacity(s)}人揃いました。CRによるチーム分けを表示しました。募集主が確定してください。'
                     else:
-                        message=f'✅ 参加しました（{len(s["roster"])}/12人）。'
+                        message=f'✅ 参加しました（{len(s["roster"])}/{capacity(s)}人）。'
                     await asyncio.to_thread(store.save,s)
                 elif what=='leave':
                     if s['state'] not in ('recruiting','ready'): raise ValueError('チーム確定後は辞退できません。')
@@ -256,7 +273,7 @@ class CustomMatchCog(commands.Cog):
                     await asyncio.to_thread(store.save,s)
                     message='✅ 辞退しました。' + (' 募集主は次の参加者に引き継がれました。' if s['roster'] and was_host else '')
                 elif what=='reroll':
-                    if s['state']!='ready':raise ValueError('12人揃った確定待ちのときのみ再抽選できます。')
+                    if s['state']!='ready':raise ValueError('定員が揃った確定待ちのときのみ再抽選できます。')
                     if did!=s['host_id'] and not admin:raise ValueError('募集主または管理者のみ再抽選できます。')
                     if s['rerolls']>=3 or s['candidate_index']+1>=len(s['teams']):
                         raise ValueError('公平性の条件を満たす別候補がありません（または3回抽選済み）。')
@@ -266,7 +283,7 @@ class CustomMatchCog(commands.Cog):
                 elif what=='confirm':
                     if s['state']!='ready':raise ValueError('確定待ちの募集がありません。')
                     if did!=s['host_id'] and not admin:raise ValueError('募集主または管理者のみ確定できます。')
-                    if len(s['roster'])!=12:raise ValueError('参加者が12人ではありません。')
+                    if len(s['roster'])!=capacity(s):raise ValueError(f'参加者が{capacity(s)}人ではありません。')
                     frozen={}
                     for uid in s['roster']:
                         row=await asyncio.to_thread(profile,uid)
@@ -337,7 +354,7 @@ class CustomMatchCog(commands.Cog):
                 s['state']='void';s['winner']='void';s['confirmed_by']=interaction.user.id
                 await asyncio.to_thread(store.save,s)
                 return f'✅ {key} を無効試合として確定しました（CR変動なし）。'
-            if len(s['teams'])==0 or len(s['frozen'])!=12:
+            if len(s['teams'])==0 or len(s['frozen'])!=capacity(s):
                 return '❌ 開始時点のCRスナップショットがありません。結果を登録できません。'
             option=s['teams'][s['candidate_index']]
             a,b=option['a'],option['b']
@@ -345,6 +362,11 @@ class CustomMatchCog(commands.Cog):
             snapshot=s['frozen']
             fake_rows=[{'discord_id':did,'a':snapshot[str(did)]['a'],'c':snapshot[str(did)]['c']} for did in ids]
             b_values={did:snapshot[str(did)]['b'] for did in ids}
+            if game_mode(s) == 'street_brawl':
+                # Separate-mode record only: the 4v4 CR-B rule has not been calibrated.
+                if not await asyncio.to_thread(store.mark_result,s['id'],winner,interaction.user.id):
+                    return '❌ 試合は既に確定された可能性があります。'
+                return f'✅ {key}（ブロウル）の勝者：チーム{winner}。記録しました（CR戦績Bは変動なし）。'
             deltas,pool,expected=cr_custom.allocate(fake_rows[:6],fake_rows[6:],winner,b_values)
             manager=self.bot.get_cog('CRManager')
             if manager is None:
@@ -392,7 +414,7 @@ class CustomMatchCog(commands.Cog):
         if not interaction.guild:
             await temp_response(interaction, 'サーバー内で実行してください。',ephemeral=True, delete_after=20);return
         rows=await asyncio.to_thread(store.pending,interaction.guild.id)
-        content='\n'.join(f'`{match_key(s)}`：開催主 <@{s["host_id"]}> ／ <t:{int(s["started_at"])}:f>' for s in rows)
+        content='\n'.join(f'`{match_key(s)}` {mode_label(s)}：開催主 <@{s["host_id"]}> ／ <t:{int(s["started_at"])}:f>' for s in rows)
         await temp_response(interaction, content or '✅ 勝敗未確定の試合はありません。',ephemeral=True, delete_after=20,
                                                 allowed_mentions=discord.AllowedMentions.none())
 
@@ -416,10 +438,13 @@ class CustomMatchCog(commands.Cog):
             snapshot=s['frozen']
             rows=[{'discord_id':did,'a':snapshot[str(did)]['a'],'c':snapshot[str(did)]['c']} for did in ids]
             b={did:snapshot[str(did)]['b'] for did in ids}
-            deltas,pool,_=cr_custom.allocate(rows[:6],rows[6:],winner.value,b)
-            detail='\n'.join(f'<@{did}> `{deltas[did]:+.1f}`' for did in ids)
-            detail+=f'\n**チーム全体：+{pool:.1f} ／ −{pool:.1f}**'
-        e=discord.Embed(title=f'勝敗確定の確認：{match_key(s)}',description=detail[:4000],color=discord.Color.orange())
+            if game_mode(s) == 'street_brawl':
+                detail='ストリートブロウル（4対4）：勝敗だけを記録します。CR戦績Bは変動しません。'
+            else:
+                deltas,pool,_=cr_custom.allocate(rows[:6],rows[6:],winner.value,b)
+                detail='\n'.join(f'<@{did}> `{deltas[did]:+.1f}`' for did in ids)
+                detail+=f'\n**チーム全体：+{pool:.1f} ／ −{pool:.1f}**'
+        e=discord.Embed(title=f'勝敗確定の確認：{match_key(s)} {mode_label(s)}',description=detail[:4000],color=discord.Color.orange())
         await interaction.response.send_message(embed=e,view=ResultConfirmView(self,session_id,winner.value),
                                                 ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
 

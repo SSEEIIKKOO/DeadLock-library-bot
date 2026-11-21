@@ -28,7 +28,11 @@ def connect():
         roster TEXT NOT NULL, teams TEXT NOT NULL DEFAULT '[]',
         frozen TEXT NOT NULL DEFAULT '{}', candidate_index INTEGER NOT NULL DEFAULT 0,
         rerolls INTEGER NOT NULL DEFAULT 0,
-        ended_reason TEXT, winner TEXT, confirmed_by INTEGER)''')
+        ended_reason TEXT, winner TEXT, confirmed_by INTEGER,
+        game_mode TEXT NOT NULL DEFAULT 'normal')''')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(custom_sessions)')}
+    if 'game_mode' not in columns:
+        conn.execute("ALTER TABLE custom_sessions ADD COLUMN game_mode TEXT NOT NULL DEFAULT 'normal'")
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS custom_one_active_per_guild
         ON custom_sessions(guild_id) WHERE state IN ('recruiting', 'ready', 'playing')""")
     conn.commit()
@@ -54,15 +58,17 @@ def get(session_id):
         return decoded(db.execute('SELECT * FROM custom_sessions WHERE id=?', (session_id,)).fetchone())
 
 
-def create(guild_id, creator_id):
+def create(guild_id, creator_id, game_mode='normal'):
+    if game_mode not in ('normal', 'street_brawl'):
+        raise ValueError('不明なゲームモードです。')
     now = time.time()
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
         if db.execute("SELECT 1 FROM custom_sessions WHERE guild_id=? AND state IN ('recruiting','ready','playing')", (guild_id,)).fetchone():
             raise ValueError('現在の募集または試合が終了してから開始してください。')
-        cur = db.execute('''INSERT INTO custom_sessions(guild_id,host_id,state,created_at,changed_at,roster)
-            VALUES(?,?, 'recruiting', ?, ?, ?)''',
-            (guild_id, creator_id, now, now, json.dumps([creator_id])))
+        cur = db.execute('''INSERT INTO custom_sessions(guild_id,host_id,state,created_at,changed_at,roster,game_mode)
+            VALUES(?,?, 'recruiting', ?, ?, ?, ?)''',
+            (guild_id, creator_id, now, now, json.dumps([creator_id]),game_mode))
         db.commit()
         return get(cur.lastrowid)
 
